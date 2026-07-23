@@ -26,7 +26,22 @@ MODO_PRUEBA = True
 def generar_reporte_todo_chile(modo_prueba=True):
     client = HubSpot(access_token=HS_ACCESS_TOKEN)
     inicio_total = time.time()
+    hoy = datetime.now()
     
+    # --- NUEVA FUNCIÓN: Transformar fechas a días transcurridos para el modelo ---
+    def calcular_dias(valor_fecha):
+        if not valor_fecha or pd.isna(valor_fecha) or valor_fecha == "N/A":
+            return "N/A"
+        try:
+            if str(valor_fecha).isdigit():
+                dt = datetime.fromtimestamp(int(valor_fecha) / 1000)
+            else:
+                dt = datetime.strptime(str(valor_fecha)[:10], "%Y-%m-%d")
+            dias = (hoy - dt).days
+            return dias if dias >= 0 else 0
+        except:
+            return "N/A"
+
     mapeo_metodos = {
         "CHLO-4": "CL - Multibanca",
         "CHLO-2": "CL - Payku",
@@ -199,7 +214,8 @@ def generar_reporte_todo_chile(modo_prueba=True):
                 datos_deal_dict[str(d.id)] = {
                     "captor": d.properties.get(PROPIEDAD_CAPTOR_DEAL, "No asignado"),
                     "estado": d.properties.get(PROPIEDAD_ESTADO_COBRO, "Sin estado"),
-                    "close_date": close_date_legible
+                    "close_date": close_date_legible,
+                    "raw_close_date": raw_close_date # Añadido para el modelo predictivo
                 }
             print(f"Extrayendo info Deals... Lote {i} procesado.")
             time.sleep(0.1)
@@ -214,7 +230,8 @@ def generar_reporte_todo_chile(modo_prueba=True):
         pagos_res = client.crm.objects.batch_api.read(
             OBJECT_TYPE_PAGOS, 
             BatchReadInputSimplePublicObjectId(
-                properties=["fecha_de_pago", "amount", "hs_pipeline_stage", "nombre_del_pago", PROPIEDAD_METODO_PAGO], 
+                # SE AÑADIERON hs_createdate y hs_lastmodifieddate
+                properties=["fecha_de_pago", "amount", "hs_pipeline_stage", "nombre_del_pago", PROPIEDAD_METODO_PAGO, "hs_createdate", "hs_lastmodifieddate"], 
                 inputs=[SimplePublicObjectId(id=pid) for pid in lote_pagos]
             )
         )
@@ -245,6 +262,15 @@ def generar_reporte_todo_chile(modo_prueba=True):
 
             row = p.properties.copy()
             
+            # --- NUEVAS VARIABLES DE RECENCIA PARA EL MODELO PREDICTIVO ---
+            row["dias_desde_fecha_pago"] = calcular_dias(p.properties.get("fecha_de_pago"))
+            row["dias_desde_creacion_pago"] = calcular_dias(p.properties.get("hs_createdate"))
+            row["dias_desde_modificacion_pago"] = calcular_dias(p.properties.get("hs_lastmodifieddate"))
+            row["dias_desde_close_date"] = calcular_dias(datos_deal.get("raw_close_date"))
+            row["dias_desde_first_visit"] = calcular_dias(contacto_info.get("hs_analytics_first_visit_timestamp"))
+            row["dias_desde_most_recent_visit"] = calcular_dias(contacto_info.get("hs_analytics_last_visit_timestamp"))
+            # --------------------------------------------------------------
+
             row[PROPIEDAD_METODO_PAGO] = metodo_mapeado
             row["hs_pipeline_stage"] = pipeline_traducido
             
